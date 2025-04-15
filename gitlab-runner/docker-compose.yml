@@ -1,0 +1,19 @@
+version: '3.8'
+services:
+  gitlab-runner1:
+    image: gitlab/gitlab-runner:alpine
+    restart: always
+    container_name: gitlab-runner
+    hostname: gitlab-runner
+    volumes:
+      - ./config/gitlab-runner:/etc/gitlab-runner
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      gitlab-network:
+        aliases:
+          - gitlab-runner
+
+networks:
+  gitlab-network:
+    external:
+      name: devSecNetwork

@@ -1,0 +1,122 @@
+variables:
+  DOCKER_CLIENT_TIMEOUT: 600
+  COMPOSE_HTTP_TIMEOUT: 600
+  DOCKER_BUILDKIT: 0
+  COMPOSE_DOCKER_CLI_BUILD: 0
+
+stages:
+  - test
+  - lint
+  - sast
+  - build
+  - deploy
+  - zap_scan
+  - notify
+
+# Testes com cobertura
+unit_tests:
+  stage: test
+  image: python:3.12-slim
+  script:
+    - pip install -r requirements.txt
+    - echo "Executando testes com coverage"
+    - PYTHONPATH=todo_project coverage run -m unittest discover -s todo_project/tests
+    - coverage report
+    - coverage html -d coverage_html
+  artifacts:
+    paths:
+      - coverage_html/
+    expire_in: 1 week
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^feature\/.*$/ || $CI_COMMIT_BRANCH == "development" || $CI_COMMIT_BRANCH == "main"'
+
+
+# Lint com flake8 e log salvo
+flake8_lint:
+  stage: lint
+  image: python:3.12-slim
+  script:
+    - pip install flake8 flake8-html
+    - PYTHONPATH=. flake8 todo_project --format=html --htmldir=flake8_report || true
+  artifacts:
+    paths:
+      - flake8_report
+    expire_in: 1 week
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^feature\/.*$/ || $CI_COMMIT_BRANCH == "development" || $CI_COMMIT_BRANCH == "main"'
+     
+
+# Análise SAST com Bandit
+bandit_sast:
+  stage: sast
+  image: python:3.12
+  script:
+    - pip install bandit
+    - bandit -r . -f json -o bandit-report.json || true
+  artifacts:
+    paths:
+      - bandit-report.json
+    reports:
+      sast: bandit-report.json
+    expire_in: 1 week
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^feature\/.*$/ || $CI_COMMIT_BRANCH == "development" || $CI_COMMIT_BRANCH == "main"'
+
+    
+    
+# Build da imagem
+build_job:
+  stage: build
+  image: docker:20.10.16
+  script:
+    - docker build -t ex-build-dev:latest .
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "development" || $CI_COMMIT_BRANCH == "main"'
+    
+
+# Deploy local com Docker
+deploy_job:
+  stage: deploy
+  image: docker:20.10.16
+  script:
+    - echo "Removendo container anterior"
+    - PORT_CONTAINERS=$(docker ps --filter "publish=8080" -q)
+    - echo $PORT_CONTAINERS
+    - if [ -n "$PORT_CONTAINERS" ]; then
+        docker stop $PORT_CONTAINERS;
+        docker rm $PORT_CONTAINERS;
+        sleep 5;
+      fi
+    - echo "Deploying the app"
+    - docker run -d -p 8080:8080 ex-build-dev:latest
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+    
+# Análise DAST com ZAP
+zap_dast:
+  stage: zap_scan
+  image: ghcr.io/zaproxy/zaproxy:stable
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+  script:
+    - echo "Esperando app iniciar..."
+    - mkdir -p /zap/wrk
+    - cd /zap/wrk
+    - zap-baseline.py -t http://192.168.2.106:8080 -r zap_report.html || true
+    - cp /zap/wrk/zap_report.html $CI_PROJECT_DIR/zap_report.html
+  artifacts:
+    paths:
+      - zap_report.html
+    expire_in: 1 week
+    when: always
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+
+# Finalização
+notify:
+  stage: notify
+  script:
+    - echo "Pipeline finalizada com sucesso!"
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+
